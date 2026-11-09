@@ -22,14 +22,23 @@
     <label>Email <input id="email" type="email" autocomplete="username" required></label>
     <label>Password <input id="password" type="password" autocomplete="current-password" required></label>
     <button id="signinGo" type="submit">Continue</button>
+    <button id="toSignup" type="button" class="quiet">Create an account</button>
+  </form>
+
+  <form id="signupForm" data-step="signup" hidden autocomplete="on">
+    <p>Create a Private TV account. You'll get an email to confirm it.</p>
+    <label>Email <input id="signupEmail" type="email" autocomplete="username" required></label>
+    <label>Password (at least 8 characters) <input id="signupPassword" type="password" autocomplete="new-password" minlength="8" required></label>
+    <button id="signupGo" type="submit">Create account</button>
+    <button id="toSignin" type="button" class="quiet">I have an account</button>
   </form>
 
   <form id="approveForm" data-step="approve" hidden autocomplete="off">
     <p>Check that the TV shows this code:</p>
     <p id="checkCode" class="check" aria-label="Check code"></p>
     <label class="tick"><input id="matches" type="checkbox"> The TV shows the same code</label>
-    <label>Sync passphrase <input id="passphrase" type="password" autocomplete="off" required></label>
-    <p class="small">The passphrase unlocks this account's key on this phone. Only the TV can open what's sent to it.</p>
+    <p id="newIntro" class="note" hidden>Sync isn't on for this account yet. Choose a sync passphrase: every TV and PC that joins the account will need it. It locks your records before they're uploaded and can't be recovered, so write it down.</p>
+    <label>Sync passphrase <input id="passphrase" type="password" autocomplete="off" required></label>    <p class="small">The passphrase unlocks this account's key on this phone. Only the TV can open what's sent to it.</p>
     <button id="approveGo" type="submit">Approve this TV</button>
     <button id="cancel" type="button" class="quiet">Cancel</button>
   </form>
