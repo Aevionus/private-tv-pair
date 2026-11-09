@@ -1,7 +1,8 @@
 // A8 step 4: approving a TV from a phone. A static page: everything secret happens here, in the
 // browser, with WebCrypto. The TV's pairing ID and public key arrive in the address's # part, which
-// browsers never send to a server. The sync key is unlocked with the passphrase and sealed to the
-// TV's key before it leaves the phone, exactly as the Windows app does (electron/sync-core.js).
+// browsers never send to a server. Signed in, the page takes the account's sync key (kept in the
+// account: the password is the only secret) and seals it to the TV's key before it leaves the phone,
+// exactly as the Windows app does (electron/sync-core.js).
 'use strict';
 const PairPage = (() => {
   const LABEL = 'private-tv pairing v1';
@@ -24,9 +25,8 @@ const PairPage = (() => {
     login: 'That email and password weren\'t accepted.',
     confirm: 'Confirm your email address first, using the link that was sent to it.',
     'rate-limited': 'Too many tries. Wait a few minutes and try again.',
-    passphrase: 'That isn\'t this account\'s sync passphrase.',
-    'short-passphrase': 'Choose a longer sync passphrase: at least 8 characters.',
-    raced: 'Another device just turned on sync for this account. Enter the passphrase it set.',
+    'bad-code': 'That code didn\'t work. Check it, or ask for a new one.',
+    'old-account': 'This account was set up by an older test version of the app. Make a new account to sync.',
     'weak-password': 'Choose a longer password: at least 8 characters.',
     'email-taken': 'That email already has an account. Sign in instead.',
     'not-found': 'That TV request has run out or was already approved. Start pairing again on the TV.',
@@ -45,32 +45,6 @@ const PairPage = (() => {
     const check = await hkdf(unhex(syncKeyHex), new Uint8Array(32), CHECK_LABEL);
     const mac = await subtle.importKey('raw', check, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
     return b64(await subtle.sign('HMAC', mac, utf8(CHECK_LABEL)));
-  }
-  async function passphraseKey(passphrase, saltB64, rounds) {
-    const text = String(passphrase).normalize('NFC');
-    if ([...text].length < 8 || !Number.isInteger(rounds) || rounds < 100000) throw new PairError('short-passphrase');
-    const base = await subtle.importKey('raw', utf8(text), 'PBKDF2', false, ['deriveBits']);
-    return subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: unb64(saltB64), iterations: rounds }, base, 256);
-  }
-  // A new account's key, locked with its passphrase, as electron/sync-core.js wrapKey.
-  async function wrapKey(syncKeyHex, passphrase, saltB64, rounds, accountId, ivHex) {
-    if (!/^[0-9a-f]{64}$/i.test(String(syncKeyHex))) throw new Error('The sync key must be 32 bytes.');
-    const key = await subtle.importKey('raw', await passphraseKey(passphrase, saltB64, rounds), 'AES-GCM', false, ['encrypt']);
-    const iv = ivHex ? unhex(ivHex) : globalThis.crypto.getRandomValues(new Uint8Array(12));
-    const body = new Uint8Array(await subtle.encrypt({ name: 'AES-GCM', iv, additionalData: utf8(`private-tv sync key v1\n${accountId}`) }, key, utf8(String(syncKeyHex).toLowerCase())));
-    return b64(concat(new Uint8Array([1]), iv, body));
-  }
-  async function unwrapKey(wrapped, passphrase, saltB64, rounds, accountId, check) {
-    let keyBytes;
-    try { keyBytes = await passphraseKey(passphrase, saltB64, rounds); } catch { throw new PairError('passphrase'); }
-    const raw = unb64(wrapped);
-    if (raw.length < 29 || raw[0] !== 1) throw new PairError('passphrase');
-    const key = await subtle.importKey('raw', keyBytes, 'AES-GCM', false, ['decrypt']);
-    let plain;
-    try { plain = new TextDecoder().decode(await subtle.decrypt({ name: 'AES-GCM', iv: raw.slice(1, 13), additionalData: utf8(`private-tv sync key v1\n${accountId}`) }, key, raw.slice(13))); }
-    catch { throw new PairError('passphrase'); }
-    if (!/^[0-9a-f]{64}$/.test(plain) || (check !== undefined && await keyCheck(plain) !== check)) throw new PairError('refused');
-    return plain;
   }
   function tvKey(publicKey) {
     const raw = unb64(publicKey);
@@ -127,9 +101,25 @@ const PairPage = (() => {
         if (code === 'user_already_exists' || code === 'email_exists') throw new PairError('email-taken');
         throw failed(r);
       },
-      // The account's key row, locked with its passphrase, or null before sync is turned on.
+      // Forgot password: a 6-digit code by email, then a new password. Looks the same whether or not
+      // the email has an account. The answer to the code is a session, so the page carries on signed in.
+      async requestReset(email) {
+        const r = await call('POST', '/auth/v1/recover', { body: { email: String(email).trim() } });
+        if (r.status === 429) throw new PairError('rate-limited');
+        if (r.status >= 500) throw new PairError('unavailable');
+      },
+      async confirmReset(email, code, password) {
+        if (String(password).length < 8) throw new PairError('weak-password');
+        const v = await call('POST', '/auth/v1/verify', { body: { type: 'recovery', email: String(email).trim(), token: String(code).replace(/\s/g, '') } });
+        if (v.status !== 200 || !v.json?.access_token) throw new PairError(v.status === 429 ? 'rate-limited' : v.status >= 500 ? 'unavailable' : 'bad-code');
+        const s = { token: v.json.access_token, accountId: v.json.user?.id };
+        const u = await call('PUT', '/auth/v1/user', { token: s.token, body: { password: String(password) } });
+        if (u.status !== 200) throw (u.json?.error_code === 'weak_password' ? new PairError('weak-password') : failed(u));
+        return s;
+      },
+      // The account's key row (the sync key, kept in the account), or null before sync is turned on.
       async keyRow(s) {
-        const r = await call('GET', '/rest/v1/sync_accounts?select=kdf_rounds,kdf_salt,wrapped_key,key_check', { token: s.token });
+        const r = await call('GET', '/rest/v1/sync_accounts?select=kdf,wrapped_key,key_check', { token: s.token });
         if (r.status !== 200 || !Array.isArray(r.json)) throw failed(r);
         return r.json[0] || null;
       },
@@ -164,25 +154,34 @@ const PairPage = (() => {
     if (request.publicKey && found.publicKey !== request.publicKey) throw new PairError('wrong-tv');
     return { pairingId: found.pairingId, publicKey: found.publicKey, checkCode: await checkCode(found.publicKey) };
   }
-  // Approves the TV. For an account without sync yet (create, when the page asked for a new passphrase),
-  // this turns it on: a new sync key, locked with the passphrase chosen here, as the Windows app makes it.
-  async function approve(api, s, tv, passphrase, create = false) {
-    const row = await api.keyRow(s);
-    let syncKey;
-    if (row) syncKey = await unwrapKey(row.wrapped_key, passphrase, row.kdf_salt, Number(row.kdf_rounds), s.accountId, row.key_check);
-    else {
-      if (!create) throw new PairError('raced');
-      syncKey = hex(globalThis.crypto.getRandomValues(new Uint8Array(32)));
-      const salt = b64(globalThis.crypto.getRandomValues(new Uint8Array(16)));
-      const made = await api.createKeyRow(s, { kdf: 'pbkdf2-sha256', kdf_rounds: NEW_ROUNDS, kdf_salt: salt, wrapped_key: await wrapKey(syncKey, passphrase, salt, NEW_ROUNDS, s.accountId), key_check: await keyCheck(syncKey) });
-      if (made === 'exists') throw new PairError('raced');
+  // One password: the sync key is kept in the account, as electron/sync-core.js serverRow / keyFromRow.
+  async function serverRow(syncKeyHex) {
+    if (!/^[0-9a-f]{64}$/i.test(String(syncKeyHex))) throw new Error('The sync key must be 32 bytes.');
+    return { kdf: 'server-v1', kdf_rounds: null, kdf_salt: null, wrapped_key: b64(unhex(syncKeyHex)), key_check: await keyCheck(syncKeyHex) };
+  }
+  async function keyFromRow(row) {
+    if (row?.kdf !== 'server-v1') throw new PairError('old-account');
+    const raw = unb64(String(row.wrapped_key || ''));
+    if (raw.length !== 32) throw new PairError('refused');
+    const key = hex(raw);
+    if (await keyCheck(key) !== row.key_check) throw new PairError('refused');
+    return key;
+  }
+  // Approves the TV, handing it the account's sync key sealed to it. For an account without sync yet,
+  // this turns it on with a new key; if another device did that first, its key is used.
+  async function approve(api, s, tv) {
+    let row = await api.keyRow(s);
+    if (!row) {
+      const made = await api.createKeyRow(s, await serverRow(hex(globalThis.crypto.getRandomValues(new Uint8Array(32)))));
+      row = await api.keyRow(s);
+      if (!row) throw new PairError(made === 'exists' ? 'refused' : 'unavailable');
     }
+    const syncKey = await keyFromRow(row);
     const sealedKey = await seal(tv.publicKey, tv.pairingId, { syncKey, accountId: s.accountId });
     await api.pair(s, { action: 'approve', pairingId: tv.pairingId, sealedKey });
     return { approved: true };
   }
-  const NEW_ROUNDS = 600000;
-  return { PairError, keyCheck, wrapKey, unwrapKey, checkCode, seal, service, fromLink, findTv, approve, b64, unb64, hex };
+  return { PairError, keyCheck, serverRow, keyFromRow, checkCode, seal, service, fromLink, findTv, approve, b64, unb64, hex };
 })();
 if (typeof module !== 'undefined') module.exports = PairPage;
 
@@ -202,17 +201,24 @@ if (typeof document !== 'undefined') {
   let linked = fromEmail ? null : PairPage.fromLink(location.hash) || remembered();
   if (linked) { try { sessionStorage.setItem('tv', JSON.stringify(linked)); } catch { /* fine without */ } }
   if (location.hash) history.replaceState(null, '', location.pathname + location.search);
-  let session = null, tv = null, newAccount = false, waiting = 0;
+  let session = null, tv = null, waiting = 0, resetEmail = '';
   const show = step => { for (const el of document.querySelectorAll('[data-step]')) el.hidden = el.dataset.step !== step; };
   const say = (text, bad = true) => { const el = $('message'); el.textContent = text || ''; el.className = bad ? 'error' : 'note'; };
   const busy = (button, on, label) => { button.disabled = on; if (label) button.textContent = label; };
   const problem = error => error instanceof PairPage.PairError ? error.message : 'Something went wrong on this page. Start again.';
-  const setNew = on => { newAccount = on; $('newIntro').hidden = !on; };
   $('codeRow').hidden = Boolean(linked);
   show(fromEmail ? 'confirmed' : 'signin');
 
-  // Signed in: find the TV, then the passphrase. A link that ran out asks for the TV's new code instead,
-  // still signed in. From the QR, the link itself names the TV's key, so there's no code to compare.
+  // Hands the TV the account's key, then signs this phone out again.
+  async function finish() {
+    await PairPage.approve(api, session, tv);
+    await api.signOut(session); session = null; tv = null;
+    forget(); say('');
+    show('done');
+  }
+  // Signed in: find the TV and approve it. From the QR, the link itself names the TV's key, so it's
+  // approved straight away; a typed code shows the TV's check code to compare first. A link that ran
+  // out asks for the TV's new code instead, still signed in.
   async function signedIn(request) {
     try { tv = await PairPage.findTv(api, session, request); }
     catch (error) {
@@ -223,12 +229,46 @@ if (typeof document !== 'undefined') {
       }
       throw error;
     }
-    setNew(!(await api.keyRow(session)));
-    const scanned = Boolean(request.pairingId);
-    $('compare').hidden = scanned; $('checkCode').textContent = tv.checkCode;
+    if (request.pairingId) { await finish(); return; }
+    $('checkCode').textContent = tv.checkCode; $('matches').checked = false;
     show('approve'); say('');
-    $('passphrase').focus();
   }
+  // Signed in with no TV known yet (no QR, no code): ask for the TV's code.
+  async function afterSignIn() {
+    const code = $('tvCode').value.replace(/\D/g, '');
+    if (linked) await signedIn(linked);
+    else if (code.length === 8) await signedIn({ code });
+    else { $('newCode').value = ''; show('tvcode'); say('Signed in. Type the 8-digit code on the TV.', false); }
+  }
+
+  // Forgot password: a code by email, then a new one. That's all: everything synced stays.
+  $('toReset').addEventListener('click', () => { $('resetEmail').value = $('email').value; $('resetCodeRows').hidden = true; $('resetGo').textContent = 'Send a code'; resetEmail = ''; say(''); show('reset'); });
+  $('resetBack').addEventListener('click', () => { say(''); show('signin'); });
+  $('resetForm').addEventListener('submit', async event => {
+    event.preventDefault();
+    const button = $('resetGo'); say('');
+    try {
+      if (!resetEmail) {
+        busy(button, true, 'Sending…');
+        resetEmail = $('resetEmail').value.trim();
+        await api.requestReset(resetEmail);
+        $('resetCodeRows').hidden = false; $('resetCode').focus();
+        say('If that email has an account, a 6-digit code is on its way.', false);
+        busy(button, false, 'Change password');
+        return;
+      }
+      busy(button, true, 'Changing…');
+      session = await api.confirmReset(resetEmail, $('resetCode').value, $('resetPassword').value);
+      $('resetPassword').value = ''; $('resetCode').value = ''; $('email').value = resetEmail;
+      say('Password changed. Everything synced is still there.', false);
+      await afterSignIn();
+    } catch (error) {
+      // A failed send can be tried again; a wrong code keeps the email and asks for the code again.
+      if ($('resetCodeRows').hidden) resetEmail = '';
+      say(problem(error));
+    }
+    finally { busy(button, false, resetEmail ? 'Change password' : 'Send a code'); }
+  });
 
   $('toSignup').addEventListener('click', () => { $('signupEmail').value = $('email').value; say(''); show('signup'); });
   $('toSignin').addEventListener('click', () => { say(''); show('signin'); });
@@ -239,7 +279,7 @@ if (typeof document !== 'undefined') {
     try {
       const made = await api.signUp(email, password, location.origin + location.pathname);
       $('signupPassword').value = ''; $('email').value = email;
-      if (made.session) { session = made.session; await signedIn(linked || { code: $('tvCode').value }); return; }
+      if (made.session) { session = made.session; await afterSignIn(); return; }
       // Waits here for the email link, signing in every few seconds; the password stays in this page only.
       $('sentTo').textContent = email; show('waiting');
       const mine = ++waiting;
@@ -249,7 +289,7 @@ if (typeof document !== 'undefined') {
         try { session = await api.signIn(email, password); }
         catch (error) { if (error instanceof PairPage.PairError && ['confirm', 'offline', 'unavailable', 'rate-limited'].includes(error.code)) continue; throw error; }
         waiting++;
-        if (linked) await signedIn(linked); else { show('tvcode'); say('Email confirmed. Type the 8-digit code on the TV.', false); }
+        await afterSignIn();
       }
     } catch (error) { waiting++; show('signup'); say(problem(error)); }
     finally { busy(button, false, 'Create account'); }
@@ -260,11 +300,9 @@ if (typeof document !== 'undefined') {
     event.preventDefault();
     const button = $('signinGo'); busy(button, true, 'Signing in…'); say('');
     try {
-      const code = $('tvCode').value.replace(/\D/g, '');
-      if (!linked && code.length !== 8) throw new PairPage.PairError('not-found');
       session = await api.signIn($('email').value, $('password').value);
       $('password').value = '';
-      await signedIn(linked || { code });
+      await afterSignIn();
     } catch (error) { say(problem(error)); }
     finally { busy(button, false, 'Continue'); }
   });
@@ -280,20 +318,10 @@ if (typeof document !== 'undefined') {
   });
   $('approveForm').addEventListener('submit', async event => {
     event.preventDefault();
-    if (!$('compare').hidden && !$('matches').checked) { say('Check that the TV shows the same code first.'); return; }
+    if (!$('matches').checked) { say('Check that the TV shows the same code first.'); return; }
     const button = $('approveGo'); busy(button, true, 'Approving…'); say('');
-    try {
-      await PairPage.approve(api, session, tv, $('passphrase').value, newAccount);
-      $('passphrase').value = '';
-      await api.signOut(session); session = null; tv = null;
-      forget(); say('');
-      show('done');
-    } catch (error) {
-      // Another device turned sync on meanwhile: its passphrase is the one to enter now.
-      if (error instanceof PairPage.PairError && error.code === 'raced') { setNew(false); $('passphrase').value = ''; }
-      say(problem(error));
-    }
+    try { await finish(); } catch (error) { say(problem(error)); }
     finally { busy(button, false, 'Approve this TV'); }
   });
-  $('cancel').addEventListener('click', async () => { if (session) await api.signOut(session); session = null; tv = null; $('passphrase').value = ''; show('signin'); say('Cancelled. Nothing was sent to the TV.', false); });
+  $('cancel').addEventListener('click', async () => { if (session) await api.signOut(session); session = null; tv = null; show('signin'); say('Cancelled. Nothing was sent to the TV.', false); });
 }

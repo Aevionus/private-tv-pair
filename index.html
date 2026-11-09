@@ -23,6 +23,18 @@
     <label>Password <input id="password" type="password" autocomplete="current-password" required></label>
     <button id="signinGo" type="submit">Continue</button>
     <button id="toSignup" type="button" class="quiet">Create an account</button>
+    <button id="toReset" type="button" class="quiet">Forgot password?</button>
+  </form>
+
+  <form id="resetForm" data-step="reset" hidden autocomplete="on">
+    <p>We'll email you a 6-digit code. Then choose a new password: everything synced stays as it is.</p>
+    <label>Email <input id="resetEmail" type="email" autocomplete="username" required></label>
+    <div id="resetCodeRows" hidden>
+      <label>Code from the email <input id="resetCode" inputmode="numeric" autocomplete="one-time-code" maxlength="10"></label>
+      <label>New password (at least 8 characters) <input id="resetPassword" type="password" autocomplete="new-password" minlength="8"></label>
+    </div>
+    <button id="resetGo" type="submit">Send a code</button>
+    <button id="resetBack" type="button" class="quiet">Back</button>
   </form>
 
   <form id="signupForm" data-step="signup" hidden autocomplete="on">
@@ -35,7 +47,7 @@
 
   <section data-step="waiting" hidden>
     <p>We sent a link to <strong id="sentTo"></strong>. Open it to confirm the account.</p>
-    <p class="note">Then come back to this page. It carries on by itself: no need to sign in again.</p>
+    <p class="note">Then come back to this page. It carries on by itself, and the TV starts syncing.</p>
     <button id="waitCancel" type="button" class="quiet">Use a different email</button>
   </section>
 
@@ -50,13 +62,9 @@
   </section>
 
   <form id="approveForm" data-step="approve" hidden autocomplete="off">
-    <div id="compare">
-      <p>Check that the TV shows this code:</p>
-      <p id="checkCode" class="check" aria-label="Check code"></p>
-      <label class="tick"><input id="matches" type="checkbox"> The TV shows the same code</label>
-    </div>
-    <p id="newIntro" class="note" hidden>Sync isn't on for this account yet. Choose a sync passphrase: every TV and PC that joins the account will need it. It locks your records before they're uploaded and can't be recovered, so write it down.</p>
-    <label>Sync passphrase <input id="passphrase" type="password" autocomplete="off" required></label>    <p class="small">The passphrase unlocks this account's key on this phone. Only the TV can open what's sent to it.</p>
+    <p>Check that the TV shows this code:</p>
+    <p id="checkCode" class="check" aria-label="Check code"></p>
+    <label class="tick"><input id="matches" type="checkbox"> The TV shows the same code</label>
     <button id="approveGo" type="submit">Approve this TV</button>
     <button id="cancel" type="button" class="quiet">Cancel</button>
   </form>
@@ -66,7 +74,7 @@
     <p>On the TV, press OK on <strong>Turn on sync</strong>. That's all. This phone has been signed out again.</p>
   </section>
 
-  <p class="small foot">Everything secret happens on this phone. Records are encrypted before they're uploaded, and this page keeps nothing.</p>
+  <p class="small foot">Your account's email and password are all it takes. The account's key is sealed to the TV before it leaves this phone, and this page keeps nothing.</p>
 </main>
 <script src="pair.js"></script>
 </body>
