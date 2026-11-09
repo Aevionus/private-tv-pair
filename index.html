@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src https://eehrfdgflssedikdsbaf.supabase.co; img-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="sync-url" content="https://eehrfdgflssedikdsbaf.supabase.co">
+<meta name="sync-key" content="sb_publishable_kCStQ9ckqFa1H1BG4S_uGA_uocXLRJI">
+<meta name="robots" content="noindex">
+<title>Pair a TV · Private TV</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <h1>Pair a TV</h1>
+  <p class="lead">Approve the TV showing a pairing code, so it syncs with your Private TV account.</p>
+  <p id="message" role="status" aria-live="polite"></p>
+
+  <form id="signinForm" data-step="signin" autocomplete="on">
+    <label id="codeRow">Code on the TV <input id="tvCode" inputmode="numeric" autocomplete="off" placeholder="1234 5678" maxlength="9"></label>
+    <label>Email <input id="email" type="email" autocomplete="username" required></label>
+    <label>Password <input id="password" type="password" autocomplete="current-password" required></label>
+    <button id="signinGo" type="submit">Continue</button>
+  </form>
+
+  <form id="approveForm" data-step="approve" hidden autocomplete="off">
+    <p>Check that the TV shows this code:</p>
+    <p id="checkCode" class="check" aria-label="Check code"></p>
+    <label class="tick"><input id="matches" type="checkbox"> The TV shows the same code</label>
+    <label>Sync passphrase <input id="passphrase" type="password" autocomplete="off" required></label>
+    <p class="small">The passphrase unlocks this account's key on this phone. Only the TV can open what's sent to it.</p>
+    <button id="approveGo" type="submit">Approve this TV</button>
+    <button id="cancel" type="button" class="quiet">Cancel</button>
+  </form>
+
+  <section data-step="done" hidden>
+    <p class="ok">Approved.</p>
+    <p>The TV will show what will sync. Nothing changes there until it's confirmed on the TV. This phone has been signed out again.</p>
+  </section>
+
+  <p class="small foot">Everything secret happens on this phone. Records are encrypted before they're uploaded, and this page keeps nothing.</p>
+</main>
+<script src="pair.js"></script>
+</body>
+</html>
