@@ -115,10 +115,13 @@ const PairPage = (() => {
         throw failed(r);
       },
       // Creates an account. Supabase emails a confirmation link; the answer never says whether the email had one.
-      async signUp(email, password) {
+      // backTo: where the email's link lands (this page), if the project allows it.
+      async signUp(email, password, backTo) {
         if (String(password).length < 8) throw new PairError('weak-password');
-        const r = await call('POST', '/auth/v1/signup', { body: { email: String(email).trim(), password: String(password) } });
-        if (r.status === 200) return { confirm: !r.json?.access_token };
+        const route = '/auth/v1/signup' + (backTo ? `?redirect_to=${encodeURIComponent(backTo)}` : '');
+        const r = await call('POST', route, { body: { email: String(email).trim(), password: String(password) } });
+        if (r.status === 200 && r.json?.access_token) return { confirm: false, session: { token: r.json.access_token, accountId: r.json.user?.id } };
+        if (r.status === 200) return { confirm: true };
         const code = String(r.json?.error_code || r.json?.code || '');
         if (code === 'weak_password') throw new PairError('weak-password');
         if (code === 'user_already_exists' || code === 'email_exists') throw new PairError('email-taken');
@@ -192,31 +195,66 @@ if (typeof document !== 'undefined') {
   // tab only (the TV's request ID and public key, nothing secret), so confirming a new account's email
   // and coming back still finds the TV.
   const remembered = () => { try { return JSON.parse(sessionStorage.getItem('tv') || 'null'); } catch { return null; } };
-  const linked = PairPage.fromLink(location.hash) || remembered();
+  const forget = () => { try { sessionStorage.removeItem('tv'); } catch { /* fine */ } };
+  // Opened from the confirmation email: Supabase adds its own # part (a sign-in for this browser). It's
+  // cleared unread; the page where the account was made carries on by itself.
+  const fromEmail = /(^|[#&])(type=signup|access_token=|error_code=)/.test(location.hash);
+  let linked = fromEmail ? null : PairPage.fromLink(location.hash) || remembered();
   if (linked) { try { sessionStorage.setItem('tv', JSON.stringify(linked)); } catch { /* fine without */ } }
   if (location.hash) history.replaceState(null, '', location.pathname + location.search);
-  let session = null, tv = null, newAccount = false;
+  let session = null, tv = null, newAccount = false, waiting = 0;
   const show = step => { for (const el of document.querySelectorAll('[data-step]')) el.hidden = el.dataset.step !== step; };
   const say = (text, bad = true) => { const el = $('message'); el.textContent = text || ''; el.className = bad ? 'error' : 'note'; };
   const busy = (button, on, label) => { button.disabled = on; if (label) button.textContent = label; };
   const problem = error => error instanceof PairPage.PairError ? error.message : 'Something went wrong on this page. Start again.';
   const setNew = on => { newAccount = on; $('newIntro').hidden = !on; };
   $('codeRow').hidden = Boolean(linked);
-  show('signin');
+  show(fromEmail ? 'confirmed' : 'signin');
+
+  // Signed in: find the TV, then the passphrase. A link that ran out asks for the TV's new code instead,
+  // still signed in. From the QR, the link itself names the TV's key, so there's no code to compare.
+  async function signedIn(request) {
+    try { tv = await PairPage.findTv(api, session, request); }
+    catch (error) {
+      if (error instanceof PairPage.PairError && (error.code === 'not-found' || error.code === 'wrong-tv')) {
+        linked = null; forget(); $('newCode').value = ''; show('tvcode');
+        say('The code on the TV has changed. Type the 8-digit code it shows now.');
+        return;
+      }
+      throw error;
+    }
+    setNew(!(await api.keyRow(session)));
+    const scanned = Boolean(request.pairingId);
+    $('compare').hidden = scanned; $('checkCode').textContent = tv.checkCode;
+    show('approve'); say('');
+    $('passphrase').focus();
+  }
 
   $('toSignup').addEventListener('click', () => { $('signupEmail').value = $('email').value; say(''); show('signup'); });
   $('toSignin').addEventListener('click', () => { say(''); show('signin'); });
   $('signupForm').addEventListener('submit', async event => {
     event.preventDefault();
     const button = $('signupGo'); busy(button, true, 'Creating…'); say('');
+    const email = $('signupEmail').value, password = $('signupPassword').value;
     try {
-      await api.signUp($('signupEmail').value, $('signupPassword').value);
-      $('email').value = $('signupEmail').value; $('signupPassword').value = '';
-      show('signin');
-      say('Check your email and open the confirmation link. Then come back to this page and sign in.', false);
-    } catch (error) { say(problem(error)); }
+      const made = await api.signUp(email, password, location.origin + location.pathname);
+      $('signupPassword').value = ''; $('email').value = email;
+      if (made.session) { session = made.session; await signedIn(linked || { code: $('tvCode').value }); return; }
+      // Waits here for the email link, signing in every few seconds; the password stays in this page only.
+      $('sentTo').textContent = email; show('waiting');
+      const mine = ++waiting;
+      while (mine === waiting) {
+        await new Promise(done => setTimeout(done, 4000));
+        if (mine !== waiting) return;
+        try { session = await api.signIn(email, password); }
+        catch (error) { if (error instanceof PairPage.PairError && ['confirm', 'offline', 'unavailable', 'rate-limited'].includes(error.code)) continue; throw error; }
+        waiting++;
+        if (linked) await signedIn(linked); else { show('tvcode'); say('Email confirmed. Type the 8-digit code on the TV.', false); }
+      }
+    } catch (error) { waiting++; show('signup'); say(problem(error)); }
     finally { busy(button, false, 'Create account'); }
   });
+  $('waitCancel').addEventListener('click', () => { waiting++; show('signup'); say(''); });
 
   $('signinForm').addEventListener('submit', async event => {
     event.preventDefault();
@@ -226,24 +264,29 @@ if (typeof document !== 'undefined') {
       if (!linked && code.length !== 8) throw new PairPage.PairError('not-found');
       session = await api.signIn($('email').value, $('password').value);
       $('password').value = '';
-      tv = await PairPage.findTv(api, session, linked || { code });
-      // An account without sync yet: the passphrase is chosen here, and this turns sync on.
-      setNew(!(await api.keyRow(session)));
-      $('checkCode').textContent = tv.checkCode;
-      show('approve');
-      $('passphrase').focus();
+      await signedIn(linked || { code });
+    } catch (error) { say(problem(error)); }
+    finally { busy(button, false, 'Continue'); }
+  });
+  $('codeForm').addEventListener('submit', async event => {
+    event.preventDefault();
+    const button = $('codeGo'); busy(button, true, 'Finding the TV…'); say('');
+    try {
+      const code = $('newCode').value.replace(/\D/g, '');
+      if (code.length !== 8) throw new PairPage.PairError('not-found');
+      await signedIn({ code });
     } catch (error) { say(problem(error)); }
     finally { busy(button, false, 'Continue'); }
   });
   $('approveForm').addEventListener('submit', async event => {
     event.preventDefault();
-    if (!$('matches').checked) { say('Check that the TV shows the same code first.'); return; }
+    if (!$('compare').hidden && !$('matches').checked) { say('Check that the TV shows the same code first.'); return; }
     const button = $('approveGo'); busy(button, true, 'Approving…'); say('');
     try {
       await PairPage.approve(api, session, tv, $('passphrase').value, newAccount);
       $('passphrase').value = '';
       await api.signOut(session); session = null; tv = null;
-      try { sessionStorage.removeItem('tv'); } catch { /* fine */ }
+      forget(); say('');
       show('done');
     } catch (error) {
       // Another device turned sync on meanwhile: its passphrase is the one to enter now.

@@ -33,10 +33,28 @@
     <button id="toSignin" type="button" class="quiet">I have an account</button>
   </form>
 
+  <section data-step="waiting" hidden>
+    <p>We sent a link to <strong id="sentTo"></strong>. Open it to confirm the account.</p>
+    <p class="note">Then come back to this page. It carries on by itself: no need to sign in again.</p>
+    <button id="waitCancel" type="button" class="quiet">Use a different email</button>
+  </section>
+
+  <form id="codeForm" data-step="tvcode" hidden autocomplete="off">
+    <label>Code on the TV <input id="newCode" inputmode="numeric" autocomplete="off" placeholder="1234 5678" maxlength="9"></label>
+    <button id="codeGo" type="submit">Continue</button>
+  </form>
+
+  <section data-step="confirmed" hidden>
+    <p class="ok">Email confirmed.</p>
+    <p>Go back to the page where you made the account: it carries on by itself. If you closed it, scan the code on the TV again and sign in.</p>
+  </section>
+
   <form id="approveForm" data-step="approve" hidden autocomplete="off">
-    <p>Check that the TV shows this code:</p>
-    <p id="checkCode" class="check" aria-label="Check code"></p>
-    <label class="tick"><input id="matches" type="checkbox"> The TV shows the same code</label>
+    <div id="compare">
+      <p>Check that the TV shows this code:</p>
+      <p id="checkCode" class="check" aria-label="Check code"></p>
+      <label class="tick"><input id="matches" type="checkbox"> The TV shows the same code</label>
+    </div>
     <p id="newIntro" class="note" hidden>Sync isn't on for this account yet. Choose a sync passphrase: every TV and PC that joins the account will need it. It locks your records before they're uploaded and can't be recovered, so write it down.</p>
     <label>Sync passphrase <input id="passphrase" type="password" autocomplete="off" required></label>    <p class="small">The passphrase unlocks this account's key on this phone. Only the TV can open what's sent to it.</p>
     <button id="approveGo" type="submit">Approve this TV</button>
@@ -45,7 +63,7 @@
 
   <section data-step="done" hidden>
     <p class="ok">Approved.</p>
-    <p>The TV will show what will sync. Nothing changes there until it's confirmed on the TV. This phone has been signed out again.</p>
+    <p>On the TV, press OK on <strong>Turn on sync</strong>. That's all. This phone has been signed out again.</p>
   </section>
 
   <p class="small foot">Everything secret happens on this phone. Records are encrypted before they're uploaded, and this page keeps nothing.</p>
