@@ -215,14 +215,17 @@ if (typeof document !== 'undefined') {
   const forget = () => { try { sessionStorage.removeItem('tv'); } catch { /* fine */ } };
   // Opened from the confirmation email: Supabase adds its own # part (a sign-in for this browser). It's
   // cleared unread; the page where the account was made carries on by itself.
-  const fromEmail = /(^|[#&])(type=signup|access_token=|error_code=)/.test(location.hash);
-  // Back from Google: ?code= (or ?error=), in this same tab, which kept the TV's request and the verifier.
   const back = new URLSearchParams(location.search);
-  const fromGoogle = back.has('code') || back.has('error');
-  const take = name => { try { const value = sessionStorage.getItem(name); sessionStorage.removeItem(name); return value; } catch { return null; } };
+  const fragment = new URLSearchParams(location.hash.slice(1));
+  const read = name => { try { return sessionStorage.getItem(name); } catch { return null; } };
+  const take = name => { try { const value = read(name); sessionStorage.removeItem(name); return value; } catch { return null; } };
+  const callbackError = [back, fragment].some(params => params.has('error') || params.has('error_code'));
+  // Supabase can repeat OAuth errors in the fragment. Only successful email callbacks show confirmation.
+  const fromGoogle = back.has('code') || (callbackError && Boolean(read('pkce')));
+  const fromEmail = !fromGoogle && !callbackError && (fragment.get('type') === 'signup' || fragment.has('access_token'));
   let linked = fromEmail ? null : PairPage.fromLink(location.hash) || remembered();
   if (linked) { try { sessionStorage.setItem('tv', JSON.stringify(linked)); } catch { /* fine without */ } }
-  if (location.hash || fromGoogle) history.replaceState(null, '', location.pathname);
+  if (location.hash || fromGoogle || callbackError) history.replaceState(null, '', location.pathname);
   let session = null, tv = null, waiting = 0, resetEmail = '';
   const show = step => { for (const el of document.querySelectorAll('[data-step]')) el.hidden = el.dataset.step !== step; };
   const say = (text, bad = true) => { const el = $('message'); el.textContent = text || ''; el.className = bad ? 'error' : 'note'; };
@@ -230,6 +233,7 @@ if (typeof document !== 'undefined') {
   const problem = error => error instanceof PairPage.PairError ? error.message : 'Something went wrong on this page. Start again.';
   $('codeRow').hidden = Boolean(linked);
   show(fromEmail ? 'confirmed' : 'signin');
+  if (callbackError && !fromGoogle) say('Sign-in did not finish. Try again.');
 
   // Hands the TV the account's key, then signs this phone out again.
   async function finish() {
@@ -353,6 +357,7 @@ if (typeof document !== 'undefined') {
       sessionStorage.setItem('pkce', verifier);
       const typed = $('tvCode').value.replace(/\D/g, '');
       if (typed) sessionStorage.setItem('tvCode', typed);
+      else sessionStorage.removeItem('tvCode');
       location.assign(address);
     } catch (error) { busy(button, false, 'Continue with Google'); say(error instanceof PairPage.PairError ? error.message : 'This browser can\'t keep the sign-in for this page. Use your email and password.'); }
   }
@@ -360,7 +365,7 @@ if (typeof document !== 'undefined') {
   if (fromGoogle) (async () => {
     const verifier = take('pkce'), typed = take('tvCode');
     if (typed) $('tvCode').value = typed;
-    if (back.has('error') || !verifier) { say(new PairPage.PairError('google').message); return; }
+    if (callbackError || !verifier) { say(new PairPage.PairError('google').message); return; }
     say('Signing in with Google…', false);
     try { session = await api.googleFinish(back.get('code'), verifier); await afterSignIn(); }
     catch (error) { show('signin'); say(problem(error)); }
