@@ -32,6 +32,7 @@ const PairPage = (() => {
     'not-found': 'That TV request has run out or was already approved. Start pairing again on the TV.',
     'wrong-tv': 'This link doesn\'t match the TV\'s request. Scan the code on the TV again.',
     session: 'Signed out. Sign in again.',
+    google: 'Google sign-in didn\'t finish. Try again, or use your email and password.',
     refused: 'The sync service refused that request.'
   };
   class PairError extends Error { constructor(code) { super(MESSAGES[code] || MESSAGES.refused); this.code = code; } }
@@ -117,6 +118,23 @@ const PairPage = (() => {
         if (u.status !== 200) throw (u.json?.error_code === 'weak_password' ? new PairError('weak-password') : failed(u));
         return s;
       },
+      // Continue with Google (PKCE). The start gives the address to send the browser to and a one-time
+      // verifier this tab keeps; Google sends the browser back to backTo with ?code=, and only that code
+      // with the verifier makes a session, so the code alone, seen in the address bar, is no use.
+      // An account with the same email is the same account (Supabase links verified emails).
+      async googleStart(backTo) {
+        const verifier = b64(globalThis.crypto.getRandomValues(new Uint8Array(32)));
+        const challenge = b64(await subtle.digest('SHA-256', utf8(verifier)));
+        const address = `${url}/auth/v1/authorize?provider=google&redirect_to=${encodeURIComponent(backTo)}&code_challenge=${challenge}&code_challenge_method=s256`;
+        return { address, verifier };
+      },
+      async googleFinish(code, verifier) {
+        if (!code || !verifier) throw new PairError('google');
+        const r = await call('POST', '/auth/v1/token?grant_type=pkce', { body: { auth_code: String(code), code_verifier: String(verifier) } });
+        if (r.status === 200 && r.json?.access_token) return { token: r.json.access_token, accountId: r.json.user?.id };
+        if (r.status === 429 || r.status >= 500) throw failed(r);
+        throw new PairError('google');
+      },
       // The account's key row (the sync key, kept in the account), or null before sync is turned on.
       async keyRow(s) {
         const r = await call('GET', '/rest/v1/sync_accounts?select=kdf,wrapped_key,key_check', { token: s.token });
@@ -198,9 +216,13 @@ if (typeof document !== 'undefined') {
   // Opened from the confirmation email: Supabase adds its own # part (a sign-in for this browser). It's
   // cleared unread; the page where the account was made carries on by itself.
   const fromEmail = /(^|[#&])(type=signup|access_token=|error_code=)/.test(location.hash);
+  // Back from Google: ?code= (or ?error=), in this same tab, which kept the TV's request and the verifier.
+  const back = new URLSearchParams(location.search);
+  const fromGoogle = back.has('code') || back.has('error');
+  const take = name => { try { const value = sessionStorage.getItem(name); sessionStorage.removeItem(name); return value; } catch { return null; } };
   let linked = fromEmail ? null : PairPage.fromLink(location.hash) || remembered();
   if (linked) { try { sessionStorage.setItem('tv', JSON.stringify(linked)); } catch { /* fine without */ } }
-  if (location.hash) history.replaceState(null, '', location.pathname + location.search);
+  if (location.hash || fromGoogle) history.replaceState(null, '', location.pathname);
   let session = null, tv = null, waiting = 0, resetEmail = '';
   const show = step => { for (const el of document.querySelectorAll('[data-step]')) el.hidden = el.dataset.step !== step; };
   const say = (text, bad = true) => { const el = $('message'); el.textContent = text || ''; el.className = bad ? 'error' : 'note'; };
@@ -323,5 +345,26 @@ if (typeof document !== 'undefined') {
     try { await finish(); } catch (error) { say(problem(error)); }
     finally { busy(button, false, 'Approve this TV'); }
   });
+  // Continue with Google: off to Google and back to this page, which carries on from there.
+  async function google(button) {
+    busy(button, true, 'Opening Google…'); say('');
+    try {
+      const { address, verifier } = await api.googleStart(location.origin + location.pathname);
+      sessionStorage.setItem('pkce', verifier);
+      const typed = $('tvCode').value.replace(/\D/g, '');
+      if (typed) sessionStorage.setItem('tvCode', typed);
+      location.assign(address);
+    } catch (error) { busy(button, false, 'Continue with Google'); say(error instanceof PairPage.PairError ? error.message : 'This browser can\'t keep the sign-in for this page. Use your email and password.'); }
+  }
+  for (const id of ['googleGo', 'googleSignup']) $(id).addEventListener('click', event => google(event.currentTarget));
+  if (fromGoogle) (async () => {
+    const verifier = take('pkce'), typed = take('tvCode');
+    if (typed) $('tvCode').value = typed;
+    if (back.has('error') || !verifier) { say(new PairPage.PairError('google').message); return; }
+    say('Signing in with Google…', false);
+    try { session = await api.googleFinish(back.get('code'), verifier); await afterSignIn(); }
+    catch (error) { show('signin'); say(problem(error)); }
+  })();
+
   $('cancel').addEventListener('click', async () => { if (session) await api.signOut(session); session = null; tv = null; show('signin'); say('Cancelled. Nothing was sent to the TV.', false); });
 }
