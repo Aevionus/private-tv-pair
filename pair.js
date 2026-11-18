@@ -395,9 +395,9 @@ if (typeof document !== 'undefined') {
       const nonce = PairPage.b64(globalThis.crypto.getRandomValues(new Uint8Array(32)));
       const hashed = PairPage.hex(await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(nonce)));
       gsi.initialize({
-        // Google's popup, not the browser's own FedCM sign-in: FedCM failed with "Error retrieving a
-        // token" in some browsers and left the button doing nothing, while the popup works in all of them.
-        client_id: clientId, nonce: hashed, ux_mode: 'popup', auto_select: false, itp_support: true, use_fedcm_for_button: false,
+        // Where the browser offers FedCM (Chrome), Google's script signs in through it whatever this
+        // says; elsewhere it opens Google's popup.
+        client_id: clientId, nonce: hashed, ux_mode: 'popup', auto_select: false, itp_support: true, use_fedcm_for_button: true,
         callback: async answer => {
           say('Signing in with Google…', false);
           try { session = await api.googleIdToken(answer?.credential, nonce); await afterSignIn(); }
