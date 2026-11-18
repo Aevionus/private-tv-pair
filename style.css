@@ -60,6 +60,7 @@ button.google svg { width: 20px; height: 20px; flex: none; }
 /* Google's own button, when the page uses it, goes here; it draws itself. */
 .google-slot { display: flex; justify-content: center; min-height: 0; }
 .google-slot:not(.ready) { display: none; }
+.google-slot iframe.spare { display: none !important; }
 /* Nothing else here: Google styles its button itself, with the inline styles the page allows when
    Google sign-in is on. Styling it here as well kept Google's stand-in button showing over its real
    one on iPhone. */

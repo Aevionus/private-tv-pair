@@ -415,6 +415,15 @@ if (typeof document !== 'undefined') {
           const width = Math.max(200, Math.min(400, host.clientWidth));
           gsi.renderButton(host, { type: 'standard', theme: 'outline', size: 'large', shape: 'rectangular', text: 'continue_with', logo_alignment: 'center', width });
           $(ours).hidden = true;
+          // Google shows its own button in a frame and a stand-in button until the frame is ready. On
+          // iPhone both stay, the frame as a small box under the stand-in, and both work. So while the
+          // stand-in shows, the frame is hidden; where the frame replaces it, the frame stays.
+          const tidy = () => {
+            const frame = host.querySelector('iframe'), standIn = host.querySelector('[role="button"]');
+            if (frame) frame.classList.toggle('spare', Boolean(standIn && standIn.getClientRects().length && standIn.getBoundingClientRect().height > 0));
+          };
+          new MutationObserver(tidy).observe(host, { subtree: true, childList: true, attributes: true, attributeFilter: ['style', 'class'] });
+          tidy();
         }
       };
       drawGoogle();
