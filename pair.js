@@ -128,6 +128,16 @@ const PairPage = (() => {
         const address = `${url}/auth/v1/authorize?provider=google&redirect_to=${encodeURIComponent(backTo)}&code_challenge=${challenge}&code_challenge_method=s256`;
         return { address, verifier };
       },
+      // Continue with Google on Google's own button (Google Identity Services), when the page has a
+      // client ID: Google hands this page an ID token, so its sign-in names this page, not the sync
+      // service's address. nonce is the raw value; Google was given its SHA-256, as Supabase checks.
+      async googleIdToken(idToken, nonce) {
+        if (!idToken || !nonce) throw new PairError('google');
+        const r = await call('POST', '/auth/v1/token?grant_type=id_token', { body: { provider: 'google', id_token: String(idToken), nonce: String(nonce) } });
+        if (r.status === 200 && r.json?.access_token) return { token: r.json.access_token, accountId: r.json.user?.id };
+        if (r.status === 429 || r.status >= 500) throw failed(r);
+        throw new PairError('google');
+      },
       async googleFinish(code, verifier) {
         if (!code || !verifier) throw new PairError('google');
         const r = await call('POST', '/auth/v1/token?grant_type=pkce', { body: { auth_code: String(code), code_verifier: String(verifier) } });
@@ -227,7 +237,16 @@ if (typeof document !== 'undefined') {
   if (linked) { try { sessionStorage.setItem('tv', JSON.stringify(linked)); } catch { /* fine without */ } }
   if (location.hash || fromGoogle || callbackError) history.replaceState(null, '', location.pathname);
   let session = null, tv = null, waiting = 0, resetEmail = '';
-  const show = step => { for (const el of document.querySelectorAll('[data-step]')) el.hidden = el.dataset.step !== step; };
+  // The three marks under the title: signing in (and its side steps), approving, done.
+  const STAGE = { approve: 1, done: 2, confirmed: 2 };
+  // Draws Google's buttons on steps now showing, once Google's script has loaded (below).
+  let drawGoogle = () => {};
+  const show = step => {
+    for (const el of document.querySelectorAll('[data-step]')) el.hidden = el.dataset.step !== step;
+    const at = STAGE[step] || 0;
+    ['stepSignin', 'stepApprove', 'stepDone'].forEach((id, i) => { const mark = $(id); mark?.classList?.toggle('now', i === at); mark?.classList?.toggle('past', i < at); });
+    drawGoogle();
+  };
   const say = (text, bad = true) => { const el = $('message'); el.textContent = text || ''; el.className = bad ? 'error' : 'note'; };
   const busy = (button, on, label) => { button.disabled = on; if (label) button.textContent = label; };
   const problem = error => error instanceof PairPage.PairError ? error.message : 'Something went wrong on this page. Start again.';
@@ -330,7 +349,7 @@ if (typeof document !== 'undefined') {
       $('password').value = '';
       await afterSignIn();
     } catch (error) { say(problem(error)); }
-    finally { busy(button, false, 'Continue'); }
+    finally { busy(button, false, 'Sign in'); }
   });
   $('codeForm').addEventListener('submit', async event => {
     event.preventDefault();
@@ -362,6 +381,44 @@ if (typeof document !== 'undefined') {
     } catch (error) { busy(button, false, 'Continue with Google'); say(error instanceof PairPage.PairError ? error.message : 'This browser can\'t keep the sign-in for this page. Use your email and password.'); }
   }
   for (const id of ['googleGo', 'googleSignup']) $(id).addEventListener('click', event => google(event.currentTarget));
+
+  // With a Google client ID, Google's own button replaces the one above: it signs in here, in a
+  // Google window, and names this page rather than the sync service. If Google's script doesn't load,
+  // the button above still works.
+  const clientId = meta('google-client-id');
+  if (/^[0-9]+-[a-z0-9]+\.apps\.googleusercontent\.com$/.test(clientId)) {
+    const script = document.createElement('script');
+    script.src = 'https://accounts.google.com/gsi/client'; script.async = true;
+    script.onload = async () => {
+      const gsi = globalThis.google?.accounts?.id;
+      if (!gsi) return;
+      const nonce = PairPage.b64(globalThis.crypto.getRandomValues(new Uint8Array(32)));
+      const hashed = PairPage.hex(await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(nonce)));
+      gsi.initialize({
+        client_id: clientId, nonce: hashed, ux_mode: 'popup', auto_select: false, itp_support: true, use_fedcm_for_button: true,
+        callback: async answer => {
+          say('Signing in with Google…', false);
+          try { session = await api.googleIdToken(answer?.credential, nonce); await afterSignIn(); }
+          catch (error) { show('signin'); say(problem(error)); }
+        }
+      });
+      // Google sizes its button to the box it's drawn in, so each is drawn once its step is showing and
+      // its slot is laid out (the sign-up one on first opening sign-up). Widths run from 200 to 400.
+      drawGoogle = () => {
+        for (const [slot, ours] of [['googleSlot', 'googleGo'], ['googleSignupSlot', 'googleSignup']]) {
+          const host = $(slot);
+          if (host.dataset.drawn || host.closest('[hidden]')) continue;
+          host.dataset.drawn = '1';
+          host.classList.add('ready');
+          const width = Math.max(200, Math.min(400, host.clientWidth));
+          gsi.renderButton(host, { type: 'standard', theme: 'outline', size: 'large', shape: 'rectangular', text: 'continue_with', logo_alignment: 'center', width });
+          $(ours).hidden = true;
+        }
+      };
+      drawGoogle();
+    };
+    document.head.append(script);
+  }
   if (fromGoogle) (async () => {
     const verifier = take('pkce'), typed = take('tvCode');
     if (typed) $('tvCode').value = typed;
