@@ -60,15 +60,9 @@ button.google svg { width: 20px; height: 20px; flex: none; }
 /* Google's own button, when the page uses it, goes here; it draws itself. */
 .google-slot { display: flex; justify-content: center; min-height: 0; }
 .google-slot:not(.ready) { display: none; }
-/* Google draws a plain button first and swaps in its own frame once that loads. That first button
-   relies on inline styles this page's security policy blocks, so it's kept to button size here
-   rather than letting its logo fill the card. */
-.google-slot > div { width: 100%; }
-.google-slot [role="button"] { display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 44px; padding: 0 16px;
-  border-radius: 10px; background: #fff; color: #1f1f1f; font-family: Roboto, system-ui, sans-serif; font-weight: 600; cursor: pointer; }
-.google-slot [role="button"] > div:last-child { display: flex; align-items: center; gap: 10px; }
-.google-slot [role="button"] svg { width: 20px; height: 20px; flex: none; }
-.google-slot [role="button"] span + span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+/* Nothing else here: Google styles its button itself, with the inline styles the page allows when
+   Google sign-in is on. Styling it here as well kept Google's stand-in button showing over its real
+   one on iPhone. */
 .or { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; margin: 2px 0; }
 .or::before, .or::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
 
